@@ -144,9 +144,26 @@ st.write(
     "and AI-style commentary."
 )
 
-tickers, weights, benchmark_ticker, start_date, end_date = render_sidebar()
+tickers, shares, benchmark_ticker, start_date, end_date = render_sidebar()
 
 prices = load_price_data(tickers, start_date, end_date)
+
+latest_prices = prices.ffill().iloc[-1]
+
+position_values = pd.Series(
+    {
+        ticker: shares[ticker] * latest_prices[ticker]
+        for ticker in tickers
+    }
+)
+
+portfolio_value = position_values.sum()
+
+if portfolio_value <= 0:
+    st.error("Portfolio value must be greater than zero.")
+    st.stop()
+
+weights = (position_values / portfolio_value).values
 
 if prices.empty:
     st.error("No price data found. Check tickers or date range.")

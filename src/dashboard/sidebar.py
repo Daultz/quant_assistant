@@ -1,89 +1,142 @@
-import numpy as np
 import pandas as pd
 import streamlit as st
+from datetime import date
+
+from src.data.ticker_search import search_tickers
 
 
-PORTFOLIO_PRESETS = {
-    "Custom": {
-        "tickers": "AAPL, MSFT, GOOGL, AMZN, SPY",
-        "weights": "0.2, 0.2, 0.2, 0.2, 0.2",
-    },
-    "US Mega Cap Tech": {
-        "tickers": "AAPL, MSFT, GOOGL, AMZN, NVDA",
-        "weights": "0.2, 0.2, 0.2, 0.2, 0.2",
-    },
-    "Core ETFs": {
-        "tickers": "SPY, QQQ, IWM, EFA, EEM",
-        "weights": "0.4, 0.25, 0.15, 0.1, 0.1",
-    },
-    "Defensive Portfolio": {
-        "tickers": "SPY, TLT, GLD, XLU, XLV",
-        "weights": "0.35, 0.25, 0.15, 0.1, 0.15",
-    },
-}
+DEFAULT_TICKERS = ["AAPL", "MSFT", "GOOGL", "AMZN", "SPY"]
+
+
+def initialize_portfolio_state():
+    if "selected_tickers" not in st.session_state:
+        st.session_state["selected_tickers"] = DEFAULT_TICKERS.copy()
+
+    if "shares" not in st.session_state:
+        st.session_state["shares"] = {
+            ticker: 10.0 for ticker in st.session_state["selected_tickers"]
+        }
 
 
 def render_sidebar():
+    initialize_portfolio_state()
+
     st.sidebar.header("Portfolio Inputs")
 
-    preset = st.sidebar.selectbox(
-        "Portfolio Preset",
-        list(PORTFOLIO_PRESETS.keys()),
+    search_query = st.sidebar.text_input(
+        "Search ticker",
+        placeholder="Type company name or ticker, e.g. Apple or AAPL",
     )
 
-    default_tickers = PORTFOLIO_PRESETS[preset]["tickers"]
-    default_weights = PORTFOLIO_PRESETS[preset]["weights"]
+    search_results = search_tickers(search_query)
 
-    tickers_input = st.sidebar.text_input(
-        "Tickers",
-        value=default_tickers,
-    )
+    if search_results:
+        label_to_symbol = {
+            item["label"]: item["symbol"]
+            for item in search_results
+        }
 
-    use_equal_weights = st.sidebar.checkbox(
-        "Use equal weights",
-        value=False,
-    )
-
-    if use_equal_weights:
-        weights_input = ""
-    else:
-        weights_input = st.sidebar.text_input(
-            "Weights",
-            value=default_weights,
+        selected_label = st.sidebar.selectbox(
+            "Search results",
+            list(label_to_symbol.keys()),
         )
+
+        if st.sidebar.button("Add selected ticker"):
+            selected_symbol = label_to_symbol[selected_label]
+
+            if selected_symbol not in st.session_state["selected_tickers"]:
+                st.session_state["selected_tickers"].append(selected_symbol)
+                st.session_state["shares"][selected_symbol] = 10.0
+                st.sidebar.success(f"Added {selected_symbol}")
+            else:
+                st.sidebar.info(f"{selected_symbol} is already in the portfolio.")
+
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stButton"] button {
+            background: transparent;
+            border: none;
+            padding: 0;
+            font-size: 18px;
+        }
+
+        div[data-testid="stButton"] button:hover {
+            background: transparent;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    st.sidebar.subheader("Selected Holdings")
+
+    tickers_to_remove = []
+
+    for ticker in st.session_state["selected_tickers"]:
+        col1, col2 = st.sidebar.columns([5, 1])
+
+        with col1:
+            st.session_state["shares"][ticker] = st.number_input(
+                label=ticker,
+                min_value=0.0,
+                value=float(st.session_state["shares"].get(ticker, 10.0)),
+                step=1.0,
+                key=f"shares_{ticker}",
+            )
+
+        with col2:
+            st.markdown("##### ")
+
+            if st.button(
+                "🗑️",
+                key=f"remove_{ticker}",
+                help=f"Remove {ticker}",
+            ):
+                tickers_to_remove.append(ticker)
+
+    for ticker in tickers_to_remove:
+        st.session_state["selected_tickers"].remove(ticker)
+        st.session_state["shares"].pop(ticker, None)
+        st.rerun()
 
     benchmark_ticker = st.sidebar.text_input(
         "Benchmark",
         value="SPY",
-    )
+    ).upper()
 
     start_date = st.sidebar.date_input(
         "Start Date",
         value=pd.to_datetime("2020-01-01"),
     )
 
-    end_date = st.sidebar.date_input(
-        "End Date",
-        value=pd.to_datetime("2025-01-01"),
+    use_latest_end_date = st.sidebar.checkbox(
+        "Use latest available end date",
+        value=True,
     )
 
-    tickers = [ticker.strip().upper() for ticker in tickers_input.split(",") if ticker.strip()]
-
-    if use_equal_weights:
-        weights = np.repeat(1 / len(tickers), len(tickers))
+    if use_latest_end_date:
+        end_date = date.today()
+        st.sidebar.caption(f"End Date: {end_date} latest")
     else:
-        weights = np.array([float(w.strip()) for w in weights_input.split(",") if w.strip()])
+        end_date = st.sidebar.date_input(
+            "End Date",
+            value=date.today(),
+        )
 
-    if len(tickers) != len(weights):
-        st.sidebar.error("Number of tickers must match number of weights.")
+    tickers = st.session_state["selected_tickers"]
+    shares = st.session_state["shares"]
+
+    if not tickers:
+        st.sidebar.error("Please add at least one ticker.")
         st.stop()
 
-    if not np.isclose(weights.sum(), 1.0):
-        st.sidebar.error(f"Weights must sum to 1. Current sum: {weights.sum():.2f}")
+    if sum(shares[ticker] for ticker in tickers) <= 0:
+        st.sidebar.error("Please enter at least one positive share amount.")
         st.stop()
 
     if start_date >= end_date:
         st.sidebar.error("Start date must be before end date.")
         st.stop()
 
-    return tickers, weights, benchmark_ticker, start_date, end_date
+    return tickers, shares, benchmark_ticker, start_date, end_date
